@@ -110,121 +110,227 @@ L = (
 
 
 
-import sys
+def add_round_key(state, round_key):
+    return [state[i] ^ round_key[i] for i in range(16)] #xoring state with the round key
 
-# AES Functions
+
+def shift_rows(state):
+    return [
+        state[0], state[5], state[10], state[15],
+        state[4], state[9], state[14], state[3],
+        state[8], state[13], state[2], state[7],
+        state[12], state[1], state[6], state[11]
+    ]
+
+
+def inv_shift_rows(state):
+    return [
+        state[0], state[13], state[10], state[7],
+        state[4], state[1], state[14], state[11],
+        state[8], state[5], state[2], state[15],
+        state[12], state[9], state[6], state[3]
+    ]
+
+
+def g_mul(a, b): #Galois field multiplication
+    if a == 0 or b == 0:
+        return 0
+    if a == 1 or b == 1:
+        return a * b
+
+    return E[(L[a] + L[b]) % 0xff]
+
+
+def mix_columns(state, matrix):
+    for i in range(4):
+        column = state[i * 4: i * 4 + 4]
+        state[i * 4] = g_mul(matrix[0][0], column[0]) ^ g_mul(matrix[0][1], column[1]
+                                                              ) ^ g_mul(matrix[0][2], column[2]) ^ g_mul(matrix[0][3], column[3])
+        state[i * 4 + 1] = g_mul(matrix[1][0], column[0]) ^ g_mul(matrix[1][1],
+                                                                  column[1]) ^ g_mul(matrix[1][2], column[2]) ^ g_mul(matrix[1][3], column[3])
+        state[i * 4 + 2] = g_mul(matrix[2][0], column[0]) ^ g_mul(matrix[2][1],
+                                                                  column[1]) ^ g_mul(matrix[2][2], column[2]) ^ g_mul(matrix[2][3], column[3])
+        state[i * 4 + 3] = g_mul(matrix[3][0], column[0]) ^ g_mul(matrix[3][1],
+                                                                  column[1]) ^ g_mul(matrix[3][2], column[2]) ^ g_mul(matrix[3][3], column[3])
+    return state
+
+
+def rot_word(word):
+    return word[1:] + word[:1]
+
+
+def sub_bytes(state):
+    return [s_box[b] for b in state]
+
+
+def inv_sub_bytes(state):
+    return [inv_s_box[b] for b in state]
+
 
 def expand_key(key, rounds):
     expanded_key = []
     expanded_key += key
-    for i in range(4, 4 * (rounds + 1)):
+
+    for i in range(4, 4 * rounds):
         temp = expanded_key[-4:]
         if i % 4 == 0:
             temp = rot_word(temp)
             temp = sub_bytes(temp)
             temp[0] ^= r_con[(i // 4) - 1]
+
         for j in range(4):
             temp[j] ^= expanded_key[-16 + j]
+
         expanded_key += temp
+    hex_expanded_key = [hex(x) for x in expanded_key]
+    print("Expanded key at round "+  str(rounds) + " is: ", hex_expanded_key)
     return expanded_key
 
-def encrypt_block(state, expanded_key, rounds):
+
+def encrypt_block(state: bytes, expanded_key: bytes, rounds: int):
     round_key_gen = (expanded_key[i * 16: i * 16 + 16] for i in range(rounds))
     state = add_round_key(state, next(round_key_gen))
-    for _ in range(rounds - 1):
+    intermediate_states = [f"Round 0 (Initial AddRoundKey): {bytes_to_hex_string(state)}"]
+
+    if rounds <= 1:
+        return state, intermediate_states
+
+    middle_rounds = rounds - 2
+    for i in range(middle_rounds):
         state = sub_bytes(state)
         state = shift_rows(state)
         state = mix_columns(state, mix_columns_matrix)
         state = add_round_key(state, next(round_key_gen))
+        intermediate_states.append(f"Round {i + 1} (After AddRoundKey): {bytes_to_hex_string(state)}")
+
     state = sub_bytes(state)
     state = shift_rows(state)
     state = add_round_key(state, next(round_key_gen))
-    return state
+    intermediate_states.append(f"Round {rounds - 1} (Final AddRoundKey): {bytes_to_hex_string(state)}")
 
-def decrypt_block(state, expanded_key, rounds):
+    return state, intermediate_states
+
+
+
+def bytes_to_hex_string(bytes: bytes):
+    return ''.join(list(map(lambda x: f'{x:02x}', bytes)))
+
+##def pad_message(message: bytes):
+    block_size = 16
+    padding = block_size - len(message) % block_size
+    if padding == 0:
+        padding = block_size
+    print(f'Padding message with {padding} bytes')
+    padded_message = message + bytes([padding] * padding)
+    return padded_message
+
+
+#def unpad_message(message):
+    padding = message[-1]
+    return message[:-padding]
+
+
+def join_blocks(states: list[list[bytes]]):
+    return bytes([byte for state in states for byte in state])
+
+
+def split_message(message, block_size=16):
+      return [message[i:i+block_size] for i in range(0, len(message), block_size)]
+
+
+##def generate_keystreams(expanded_key: bytes, rounds: int, iv: bytes, n: int):
+   #keystreams = []
+    #print(f'IV: {bytes_to_hex_string(iv)}')
+    #counter = int.from_bytes(iv, byteorder='big')
+    #for _ in range(n):
+      #counter_block = counter.to_bytes(16, byteorder='big')
+      #  keystream = encrypt_block(counter_block, expanded_key, rounds)
+     #   keystreams.append(keystream)
+    #    counter += 1
+   # return keystreams
+
+
+#def ctr_encrypt(states, expanded_key, rounds, iv):
+    #if iv is None:
+     #   raise Exception('IV is required for CTR mode')
+
+    #keystreams = generate_keystreams(expanded_key, rounds, iv, len(states))
+
+    #blocks = []
+    #for plain_text_block, keystream in zip(states, keystreams):
+     #   blocks.append(
+      #      [a ^ b for a, b in zip(plain_text_block, keystream)])
+    #return blocks
+
+def encrypt(message: bytes, key: bytes,rounds=11):
+    
+    expanded_key = expand_key(key, rounds)
+    #padded_message = pad_message(message)
+    states = split_message(message)
+    encrypted_blocks = [encrypt_block(state, expanded_key, rounds) for state in states]
+    encrypted_message = join_blocks(encrypted_blocks)
+
+    print('Original Message: ' + bytes_to_hex_string(message))
+    print('Number of Rounds: ' + str(rounds))
+    print('Key: ' + bytes_to_hex_string(key))
+    #print('Number of blocks: ' + str(len(states)))
+    print('Encrypted message: '+bytes_to_hex_string(encrypted_message))
+
+    return encrypted_message
+
+
+def decrypt_block(state: bytes, expanded_key: bytes, rounds: int):
     round_key_gen = (expanded_key[i * 16: i * 16 + 16] for i in range(rounds - 1, -1, -1))
     state = add_round_key(state, next(round_key_gen))
-    for _ in range(rounds - 1):
+    intermediate_states = [f"Round {rounds} (Initial AddRoundKey): {bytes_to_hex_string(state)}"]
+
+    if rounds <= 1:
+        return state, intermediate_states
+
+    middle_rounds = rounds - 2
+    for i in range(middle_rounds):
         state = inv_shift_rows(state)
         state = inv_sub_bytes(state)
         state = add_round_key(state, next(round_key_gen))
         state = mix_columns(state, inv_mix_columns_matrix)
+        intermediate_states.append(f"Round {rounds - i - 1} (After AddRoundKey): {bytes_to_hex_string(state)}")
+
     state = inv_shift_rows(state)
     state = inv_sub_bytes(state)
     state = add_round_key(state, next(round_key_gen))
-    return state
+    intermediate_states.append(f"Round 0 (Final AddRoundKey): {bytes_to_hex_string(state)}")
 
-def encrypt(message, key, rounds=11):
-    expanded_key = expand_key(key, rounds)
-    states = split_message(message)
-    encrypted_blocks = [encrypt_block(state, expanded_key, rounds) for state in states]
-    return join_blocks(encrypted_blocks)
+    return state, intermediate_states
 
-def decrypt(message, key, rounds=11):
+
+
+def decrypt(message: bytes, key: bytes, rounds=11):
     expanded_key = expand_key(key, rounds)
     states = split_message(message)
     decrypted_blocks = [decrypt_block(state, expanded_key, rounds) for state in states]
-    return join_blocks(decrypted_blocks)
+    decrypted_message = join_blocks(decrypted_blocks)
+    #print('Message: ' + bytes_to_hex_string(message))
+    #print('Rounds: ' + str(rounds))
+    #print('Key: ' + bytes_to_hex_string(key))
+    #print('Number of blocks: ' + str(len(states)))
+    #decrypted_message = unpad_message(decrypted_message)
+    print('Decrypted message: '+bytes_to_hex_string(decrypted_message))
 
-# Utility Functions
-def split_message(message, block_size=16):
-    return [message[i:i + block_size] for i in range(0, len(message), block_size)]
+    return decrypted_message
 
-def join_blocks(blocks):
-    return b"".join(blocks)
 
-def add_round_key(state, round_key):
-    return [a ^ b for a, b in zip(state, round_key)]
+#def fit_string(string: str, length: int):
+    if len(string) < length:
+        print(
+            'hex string is too short, padding with zero bytes to length')
+        return string.ljust(length, '0')
 
-def sub_bytes(state):
-    return [s_box[b] for b in state]
+    if len(string) > length:
+        print(
+            'hex string is too long, ignoring excess')
+        return string[:length]
 
-def inv_sub_bytes(state):
-    return [inv_s_box[b] for b in state]
-
-def shift_rows(state):
-    return [state[0], state[5], state[10], state[15],
-            state[4], state[9], state[14], state[3],
-            state[8], state[13], state[2], state[7],
-            state[12], state[1], state[6], state[11]]
-
-def inv_shift_rows(state):
-    return [state[0], state[13], state[10], state[7],
-            state[4], state[1], state[14], state[11],
-            state[8], state[5], state[2], state[15],
-            state[12], state[9], state[6], state[3]]
-
-def mix_columns(state, matrix):
-    for i in range(4):
-        column = state[i * 4: i * 4 + 4]
-        state[i * 4] = g_mul(matrix[0][0], column[0]) ^ g_mul(matrix[0][1], column[1]) ^ g_mul(matrix[0][2], column[2]) ^ g_mul(matrix[0][3], column[3])
-        state[i * 4 + 1] = g_mul(matrix[1][0], column[0]) ^ g_mul(matrix[1][1], column[1]) ^ g_mul(matrix[1][2], column[2]) ^ g_mul(matrix[1][3], column[3])
-        state[i * 4 + 2] = g_mul(matrix[2][0], column[0]) ^ g_mul(matrix[2][1], column[1]) ^ g_mul(matrix[2][2], column[2]) ^ g_mul(matrix[2][3], column[3])
-        state[i * 4 + 3] = g_mul(matrix[3][0], column[0]) ^ g_mul(matrix[3][1], column[1]) ^ g_mul(matrix[3][2], column[2]) ^ g_mul(matrix[3][3], column[3])
-    return state
-
-def rot_word(word):
-    return word[1:] + word[:1]
-
-# Constants (Add s_box, inv_s_box, r_con, mix_columns_matrix, inv_mix_columns_matrix)
-# Add other required constants and functions like g_mul, s_box, etc.
-
-if __name__ == "__main__":
-    operation = sys.argv[1]
-    message_hex = sys.argv[2]
-    key_hex = sys.argv[3]
-
-    message = bytes.fromhex(message_hex)
-    key = bytes.fromhex(key_hex)
-
-    if operation == "encrypt":
-        result = encrypt(message, key)
-    elif operation == "decrypt":
-        result = decrypt(message, key)
-    else:
-        raise ValueError("Invalid operation. Use 'encrypt' or 'decrypt'.")
-
-    print(result.hex())
+    return string
 
 
 
