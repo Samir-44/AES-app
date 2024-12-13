@@ -215,21 +215,6 @@ def encrypt_block(state: bytes, expanded_key: bytes, rounds: int):
 def bytes_to_hex_string(bytes: bytes):
     return ''.join(list(map(lambda x: f'{x:02x}', bytes)))
 
-##def pad_message(message: bytes):
-    block_size = 16
-    padding = block_size - len(message) % block_size
-    if padding == 0:
-        padding = block_size
-    print(f'Padding message with {padding} bytes')
-    padded_message = message + bytes([padding] * padding)
-    return padded_message
-
-
-#def unpad_message(message):
-    padding = message[-1]
-    return message[:-padding]
-
-
 def join_blocks(states: list[list[bytes]]):
     return bytes([byte for state in states for byte in state])
 
@@ -238,29 +223,6 @@ def split_message(message, block_size=16):
       return [message[i:i+block_size] for i in range(0, len(message), block_size)]
 
 
-##def generate_keystreams(expanded_key: bytes, rounds: int, iv: bytes, n: int):
-   #keystreams = []
-    #print(f'IV: {bytes_to_hex_string(iv)}')
-    #counter = int.from_bytes(iv, byteorder='big')
-    #for _ in range(n):
-      #counter_block = counter.to_bytes(16, byteorder='big')
-      #  keystream = encrypt_block(counter_block, expanded_key, rounds)
-     #   keystreams.append(keystream)
-    #    counter += 1
-   # return keystreams
-
-
-#def ctr_encrypt(states, expanded_key, rounds, iv):
-    #if iv is None:
-     #   raise Exception('IV is required for CTR mode')
-
-    #keystreams = generate_keystreams(expanded_key, rounds, iv, len(states))
-
-    #blocks = []
-    #for plain_text_block, keystream in zip(states, keystreams):
-     #   blocks.append(
-      #      [a ^ b for a, b in zip(plain_text_block, keystream)])
-    #return blocks
 
 def encrypt(message: bytes, key: bytes,rounds=11):
     
@@ -318,26 +280,25 @@ def decrypt(message: bytes, key: bytes, rounds=11):
 
     return decrypted_message
 
+def expand_key(key, rounds):
+    """Expand the AES key and return round keys in matrix form."""
+    expanded_key = []
+    round_keys = []
 
-#def fit_string(string: str, length: int):
-    if len(string) < length:
-        print(
-            'hex string is too short, padding with zero bytes to length')
-        return string.ljust(length, '0')
+    expanded_key += key
+    for i in range(4, 4 * (rounds + 1)):  # Generate (rounds + 1) round keys
+        temp = expanded_key[-4:]
+        if i % 4 == 0:
+            temp = rot_word(temp)
+            temp = sub_bytes(temp)
+            temp[0] ^= r_con[(i // 4) - 1]
+        for j in range(4):
+            temp[j] ^= expanded_key[-16 + j]
+        expanded_key += temp
 
-    if len(string) > length:
-        print(
-            'hex string is too long, ignoring excess')
-        return string[:length]
+        # Save the current round key as a matrix
+        if len(expanded_key) >= (i + 1) * 4:
+            current_round_key = expanded_key[-16:]
+            round_keys.append([current_round_key[j:j + 4] for j in range(0, 16, 4)])
 
-    return string
-
-
-
-
-
-
-
-
-
-
+    return expanded_key, round_keys[:rounds + 1]  # Limit to (rounds + 1) keys
