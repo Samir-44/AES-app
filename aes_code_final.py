@@ -333,18 +333,54 @@ def decrypt(message: bytes, key: bytes, rounds=11):
     return string
 
 
-import tkinter as tk
-from tkinter import ttk
 
-# AES Functions (Core unchanged; expand_key adjusted for matrix formatting)
+
+# AES Functions
+def add_round_key(state, round_key):
+    return [state[i] ^ round_key[i] for i in range(16)]
+
+def shift_rows(state):
+    return [
+        state[0], state[5], state[10], state[15],
+        state[4], state[9], state[14], state[3],
+        state[8], state[13], state[2], state[7],
+        state[12], state[1], state[6], state[11]
+    ]
+
+def inv_shift_rows(state):
+    return [
+        state[0], state[13], state[10], state[7],
+        state[4], state[1], state[14], state[11],
+        state[8], state[5], state[2], state[15],
+        state[12], state[9], state[6], state[3]
+    ]
+
+def sub_bytes(state):
+    return [s_box[b] for b in state]
+
+def inv_sub_bytes(state):
+    return [inv_s_box[b] for b in state]
+
+def g_mul(a, b):  # Galois field multiplication
+    if a == 0 or b == 0:
+        return 0
+    if a == 1 or b == 1:
+        return a * b
+    return E[(L[a] + L[b]) % 0xff]
+
+def mix_columns(state, matrix):
+    for i in range(4):
+        column = state[i * 4: i * 4 + 4]
+        state[i * 4] = g_mul(matrix[0][0], column[0]) ^ g_mul(matrix[0][1], column[1]) ^ g_mul(matrix[0][2], column[2]) ^ g_mul(matrix[0][3], column[3])
+        state[i * 4 + 1] = g_mul(matrix[1][0], column[0]) ^ g_mul(matrix[1][1], column[1]) ^ g_mul(matrix[1][2], column[2]) ^ g_mul(matrix[1][3], column[3])
+        state[i * 4 + 2] = g_mul(matrix[2][0], column[0]) ^ g_mul(matrix[2][1], column[1]) ^ g_mul(matrix[2][2], column[2]) ^ g_mul(matrix[2][3], column[3])
+        state[i * 4 + 3] = g_mul(matrix[3][0], column[0]) ^ g_mul(matrix[3][1], column[1]) ^ g_mul(matrix[3][2], column[2]) ^ g_mul(matrix[3][3], column[3])
+    return state
 
 def expand_key(key, rounds):
-    """Expand the AES key and return round keys in matrix form."""
     expanded_key = []
-    round_keys = []
-
     expanded_key += key
-    for i in range(4, 4 * (rounds + 1)):  # Generate (rounds + 1) round keys
+    for i in range(4, 4 * rounds):
         temp = expanded_key[-4:]
         if i % 4 == 0:
             temp = rot_word(temp)
@@ -353,142 +389,48 @@ def expand_key(key, rounds):
         for j in range(4):
             temp[j] ^= expanded_key[-16 + j]
         expanded_key += temp
+    return expanded_key
 
-        # Save the current round key as a matrix
-        if len(expanded_key) >= (i + 1) * 4:
-            current_round_key = expanded_key[-16:]
-            round_keys.append([current_round_key[j:j + 4] for j in range(0, 16, 4)])
+def encrypt_block(state: bytes, expanded_key: bytes, rounds: int):
+    round_key_gen = (expanded_key[i * 16: i * 16 + 16] for i in range(rounds))
+    state = add_round_key(state, next(round_key_gen))
+    for _ in range(rounds - 1):
+        state = sub_bytes(state)
+        state = shift_rows(state)
+        state = mix_columns(state, mix_columns_matrix)
+        state = add_round_key(state, next(round_key_gen))
+    state = sub_bytes(state)
+    state = shift_rows(state)
+    state = add_round_key(state, next(round_key_gen))
+    return state
 
-    return expanded_key, round_keys[:rounds + 1]  # Limit to (rounds + 1) keys
+def decrypt_block(state: bytes, expanded_key: bytes, rounds: int):
+    round_key_gen = (expanded_key[i * 16: i * 16 + 16] for i in range(rounds - 1, -1, -1))
+    state = add_round_key(state, next(round_key_gen))
+    for _ in range(rounds - 1):
+        state = inv_shift_rows(state)
+        state = inv_sub_bytes(state)
+        state = add_round_key(state, next(round_key_gen))
+        state = mix_columns(state, inv_mix_columns_matrix)
+    state = inv_shift_rows(state)
+    state = inv_sub_bytes(state)
+    state = add_round_key(state, next(round_key_gen))
+    return state
 
-def pkcs7_pad(data, block_size=16):
-    """Apply PKCS#7 padding to the data."""
-    padding_length = block_size - (len(data) % block_size)
-    padding = bytes([padding_length] * padding_length)
-    return data + padding
+def encrypt(message: bytes, key: bytes, rounds=11):
+    expanded_key = expand_key(key, rounds)
+    states = [message[i:i+16] for i in range(0, len(message), 16)]
+    encrypted_blocks = [encrypt_block(state, expanded_key, rounds) for state in states]
+    return b''.join(encrypted_blocks)
 
-def handle_submit():
-    try:
-        # Get user inputs
-        message_hex = message_entry.get().strip()
-        key_hex = key_entry.get().strip()
-        operation = operation_var.get()
-        rounds = 11  # Default AES-128 rounds
-
-        if all(c in '0123456789ABCDEF' for c in message_hex):
-                message = bytes.fromhex(message_hex)
-                if len(message_hex) != 32 or len(key_hex) != 32:
-                    raise ValueError("Message and key must be 32 hexadecimal characters (16 bytes).")
-                if operation not in ["Encrypt", "Decrypt"]:
-                    raise ValueError("Invalid operation selected.")
-
-        else:  # Plain Text
-            # Input is a plain text string, convert to bytes and apply PKCS#7 padding
-            message_hex = message_hex.encode('utf-8')
-            message = pkcs7_pad(message_hex)
-        
-        
-        key = bytes.fromhex(key_hex)
-
-        # Expand the key
-        expanded_key, round_keys = expand_key(key, rounds)
-
-        # Perform operation and log details
-        if operation == "Encrypt":
-            final_message, round_details = encrypt_block(message, expanded_key, rounds)
-        else:  # Decrypt
-            final_message, round_details = decrypt_block(message, expanded_key, rounds)
-
-        # Combine round details with round-specific key expansions
-        integrated_round_details = []
-        for i in range(len(round_details)):  # Loop over round details
-            # Add round intermediate state
-            integrated_round_details.append(round_details[i])
-
-            # Add round key matrix below the state
-            if i < len(round_keys):  # Ensure we don't exceed the round_keys length
-                round_key_matrix = "\n".join(
-                    " ".join(f"{byte:02x}" for byte in row) for row in round_keys[i]
-                )
-                integrated_round_details.append(f"Round {i} Key:\n{round_key_matrix}")
-
-        # Combine all details into a single string
-        round_logs = "\n\n".join(integrated_round_details)
-        result = (
-            f"Operation: {operation}\n"
-            f"Original Message: {message_hex}\n"
-            f"Key: {key_hex}\n"
-            f"Final Result: {bytes_to_hex_string(final_message)}\n\n"
-            f"Round-by-Round Details:\n{round_logs}"
-        )
-
-        # Display results in the GUI
-        output_text.delete("1.0", tk.END)
-        output_text.insert(tk.END, result)
-
-    except ValueError as e:
-        output_text.delete("1.0", tk.END)
-        output_text.insert(tk.END, f"Error: {str(e)}")
+def decrypt(message: bytes, key: bytes, rounds=11):
+    expanded_key = expand_key(key, rounds)
+    states = [message[i:i+16] for i in range(0, len(message), 16)]
+    decrypted_blocks = [decrypt_block(state, expanded_key, rounds) for state in states]
+    return b''.join(decrypted_blocks)
 
 
 
-
-# GUI Setup
-if __name__ == "__main__":
-    root = tk.Tk()
-    root.title("AES-128 Encryption/Decryption")
-    root.geometry("800x600")
-    root.configure(bg="#f5f5f5")  # Light background for a modern look
-
-    # Styles
-    style = ttk.Style()
-    style.configure("TLabel", font=("Arial", 12), background="#f5f5f5")
-    style.configure("TEntry", font=("Arial", 12))
-    style.configure("TButton", font=("Arial", 12), background="#0078D7", foreground="black")  # Set foreground to black
-    style.configure("TCombobox", font=("Arial", 12))
-    style.configure("TText", font=("Courier", 10))
-
-    # Header
-    header = tk.Label(root, text="AES Encryption/Decryption Tool", font=("Arial", 18, "bold"), bg="#0078D7", fg="white", padx=10, pady=10)
-    header.pack(fill=tk.X)
-
-    # Main Frame
-    frame = ttk.Frame(root, padding=20, style="TFrame")
-    frame.pack(fill=tk.BOTH, expand=True)
-
-    # Input Fields
-    message_label = ttk.Label(frame, text="Enter Message (Hexadecimal or string):")
-    message_label.grid(row=0, column=0, sticky=tk.W, pady=5)
-    message_entry = ttk.Entry(frame, font=("Arial", 12), width=50)
-    message_entry.grid(row=0, column=1, pady=5)
-
-    key_label = ttk.Label(frame, text="Enter Key (Hexadecimal):")
-    key_label.grid(row=1, column=0, sticky=tk.W, pady=5)
-    key_entry = ttk.Entry(frame, font=("Arial", 12), width=50)
-    key_entry.grid(row=1, column=1, pady=5)
-
-    operation_label = ttk.Label(frame, text="Select Operation:")
-    operation_label.grid(row=2, column=0, sticky=tk.W, pady=5)
-    operation_var = tk.StringVar(value="Encrypt")
-    operation_dropdown = ttk.Combobox(frame, textvariable=operation_var, values=["Encrypt", "Decrypt"], state="readonly", font=("Arial", 12))
-    operation_dropdown.grid(row=2, column=1, pady=5)
-
-    # Buttons
-    submit_button = ttk.Button(frame, text="Run", command=lambda: handle_submit())
-    submit_button.grid(row=3, column=1, pady=20, sticky=tk.E)
-
-    # Output Section
-    output_label = ttk.Label(frame, text="Output:")
-    output_label.grid(row=4, column=0, sticky=tk.W, pady=5)
-    output_text = tk.Text(frame, wrap=tk.WORD, font=("Courier", 10), height=15, width=80, bg="#f7f7f7", relief=tk.SOLID)
-    output_text.grid(row=5, column=0, columnspan=2, pady=10)
-
-    # Footer
-    footer = tk.Label(root, text="AES-128 Encryption Tool © 2024", font=("Arial", 10), bg="#f5f5f5", fg="gray")
-    footer.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
-
-    # Run the GUI loop
-    root.mainloop()
 
 
 
